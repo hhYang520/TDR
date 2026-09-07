@@ -57,20 +57,26 @@ A plain text file where each line represents one query:
 ## 🛠️ Compilation
 
 Compile the code with a C++17-compliant compiler:
-
-> g++ -std=c++17 -O3 -o TDR TDR.cpp
+```bash
+g++ -std=c++17 -O3 -o TDR TDR.cpp
+```
 
 ---
 
 ## 🚀 Usage
-> ./TDR <graph_file> <query_file> [--compare]
+```bash
+./TDR <graph_file> <query_file> [--compare]
+```
 
-Examples
 Run with full TDR index only:
-> ./TDR ../datasets/citeseer ../datasets/citeseer_pcr
+```bash
+./TDR ../datasets/citeseer ../datasets/citeseer_pcr
+```
 
 Run all methods and compare traversal costs:
+```bash
 > ./TDR ../datasets/citeseer ../datasets/citeseer_pcr --compare
+```
 
 ---
 
