@@ -11,7 +11,10 @@ The program evaluates **pattern-constrained reachability queries** on directed g
 ## 📁 Input File Format
 
 ### Graph File
-A plain text file where each line represents a directed edge:
+The first line gives the graph header:
+> vertices: num_V topologyEdges: num_TE labeledEdges: num_LE labels: num_L
+
+Each subsequent line represents a directed edge:
 > u v label(s)
 
 - `u`, `v`: vertex IDs
