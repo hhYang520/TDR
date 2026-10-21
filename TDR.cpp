@@ -16,11 +16,13 @@
 
 namespace bs {
     using namespace std;
+
     vector<int> source_offset;
     vector<int> targets;
     vector<int> target_offset;
     vector<int> labels;
     vector<int> graph_label_count;
+
     int num_V = 0, num_TE = 0, num_LE = 0, num_L = 0;
 
     int vis_cur = 1, cur = 0;
@@ -29,12 +31,15 @@ namespace bs {
     int s_pos;
     int *SCC;
     int SCC_pos;
-    constexpr int vertex_hash_len = 32;
+
+    constexpr int vertex_hash_len = 8;
     int label_hash_len = 1;
     constexpr int forward_default_k = 2;
     constexpr int UINT_bits = sizeof(uint32_t) * 8;
+
     bool build_group_label_index = true;
     bool build_forward_label_index = true;
+
     constexpr int output_max_pattern = 10;
     constexpr int output_max_label_length = 6;
 
@@ -53,6 +58,7 @@ namespace bs {
     inline int vertex_hash_bit(const uint32_t hv) {
         return static_cast<int>(hv >> 5 & UINT_bits - 1);
     }
+
     enum class QueryProfile { Baseline, Full, OnlyV, OnlyH };
 
     auto active_profile = QueryProfile::Full;
@@ -83,23 +89,21 @@ namespace bs {
         return build_forward_label_index && (active_profile == QueryProfile::Full || active_profile ==
                                              QueryProfile::OnlyV);
     }
+
     struct VisitRatioStats {
         long long baseline_edges = 0;
         long long profile_edges = 0;
-        long long mismatches = 0;
 
-        void add(const long long baseline, const long long profile, const bool same_outcome) {
+        void add(const long long baseline, const long long profile) {
             baseline_edges += baseline;
             profile_edges += profile;
-            if (!same_outcome) {
-                mismatches++;
-            }
         }
 
         [[nodiscard]] double ratio() const {
             return baseline_edges == 0 ? 0.0 : static_cast<double>(profile_edges) / static_cast<double>(baseline_edges);
         }
     };
+
     using VertexBits = vector<uint32_t>;
 
     struct VertexIndex {
@@ -155,8 +159,8 @@ namespace bs {
         }
 
         VertexBits &vertices_all() { return storage.vertices_all; }
-        const VertexBits &vertices_all() const { return storage.vertices_all; }
-        uint32_t leaf_hash() const { return storage.leaf_hash; }
+        [[nodiscard]] const VertexBits &vertices_all() const { return storage.vertices_all; }
+        [[nodiscard]] uint32_t leaf_hash() const { return storage.leaf_hash; }
 
     private:
         void copy_from(const VertexIndex &other) {
@@ -215,6 +219,7 @@ namespace bs {
     long long horizontal_dense_bytes = 0;
 
     uint32_t VertexIndexH::label_universe_word(int word) { return label_universe_bits[word]; }
+
     void compact_horizontal_words(vector<uint32_t> &words, vector<int> &descriptor,
                                   int width, bool vertex) {
         if (words.empty()) return;
@@ -288,6 +293,7 @@ namespace bs {
         }
         return true;
     }
+
     inline uint32_t forward_layer_word(const VertexIndexV &U, const int gid,
                                        const int layer, const int word) {
         const int slot = forward_layer_slot(U, gid, layer);
@@ -332,6 +338,7 @@ namespace bs {
             group = std::max(1, indices_vertical[uid].group);
         return (end - 1 - first) / group + 1;
     }
+
     struct Query {
         int origin;
         int destination;
@@ -343,6 +350,7 @@ namespace bs {
     };
 
     vector<Query> queries;
+
     struct ProfileRuntimeStats {
         map<int, vector<pair<double, int> > > true_qtime;
         map<int, vector<pair<double, int> > > false_qtime;
@@ -371,6 +379,7 @@ namespace bs {
             total_time[pattern] += qtime;
         }
     };
+
     inline int mix_hash(int x) {
         uint32_t value = static_cast<uint32_t>(x);
         value ^= value >> 16;
@@ -390,6 +399,7 @@ namespace bs {
     inline int vertex_hash(const int &vertex_id) {
         return mix_hash(vertex_id + 1);
     }
+
     template<class Fn>
     void for_each_label(const string &str, Fn &&fn) {
         int value = 0;
@@ -414,14 +424,25 @@ namespace bs {
     inline bool contains_label(const std::vector<int> &idsL, const int label) {
         return std::find(idsL.begin(), idsL.end(), label) != idsL.end();
     }
-    inline void configure_index_components(const string & ,
+
+    inline void configure_index_components(const string & /*reach_mode*/,
                                            const IndexProfile profile = IndexProfile::TDR) {
         active_index_profile = profile;
         build_group_label_index = profile != IndexProfile::OnlyV;
         build_forward_label_index = profile != IndexProfile::OnlyH;
     }
 
+    enum PruningBenefit : uint8_t {
+        BASE_VERTEX = 1,
+        BASE_LABEL = 2,
+        H_VERTEX = 4,
+        H_LABEL = 8
+    };
+
+    vector<uint8_t> pruning_benefit;
     std::vector<int> horizontal_group_count;
+
+
     inline int degree_group_cap(const int out_degree) {
         if (out_degree <= 3) return 1;
         return static_cast<int>(std::round(std::sqrt(static_cast<double>(out_degree))));
@@ -443,12 +464,13 @@ namespace bs {
         }
         return cnt;
     }
+
     static struct LabelHashTable {
         std::vector<int> p;
         std::vector<uint8_t> h;
         std::vector<uint32_t> mask;
 
-        void init(const int numL, int ) {
+        void init(const int numL, int /*L*/) {
             p.resize(numL);
             h.resize(numL);
             mask.resize(numL);
@@ -469,12 +491,14 @@ namespace bs {
         }
         return cnt;
     }
-    void prepare_horizontal_group_features(const std::vector<int> & ) {
+
+    void prepare_horizontal_group_features(const std::vector<int> & /*label_count*/) {
         horizontal_group_count.assign(num_V, 1);
         for (int uid = 0; uid < num_V; ++uid) {
             horizontal_group_count[uid] = degree_group_cap(source_offset[uid + 1] - source_offset[uid]);
         }
     }
+
     inline void rebuild_forward_offsets(VertexIndexV &U) {
         U.forward_offset.assign(U.forward_depth.size() + 1, 0);
         int prefix = 0;
@@ -484,6 +508,7 @@ namespace bs {
         }
         U.forward_offset[U.forward_depth.size()] = prefix;
     }
+
     inline void prepare_forward_layout(VertexIndexV &U, const int group) {
         U.group = group;
         U.forward_depth.clear();
@@ -493,6 +518,7 @@ namespace bs {
         U.forward_depth.assign(group, forward_default_k);
         rebuild_forward_offsets(U);
     }
+
     void compact_forward_layers(VertexIndexV &U) {
         if (!build_forward_label_index || U.group <= 0 || U.labels_forward.empty() ||
             U.forward_depth.empty() || !U.forward_bitmap_offset.empty())
@@ -511,6 +537,7 @@ namespace bs {
                 bitmap_words += label_hash_len;
             }
         }
+
         if (bitmap_words * sizeof(uint32_t) + offsets.size() * sizeof(int) >=
             U.labels_forward.size() * sizeof(uint32_t))
             return;
@@ -529,6 +556,8 @@ namespace bs {
         if (!build_forward_label_index) return;
         for (auto &v: indices_vertical) compact_forward_layers(v);
     }
+
+
     struct BuildState {
         std::vector<int> vis;
         std::vector<int> next;
@@ -544,6 +573,7 @@ namespace bs {
             hash_value.assign(n, 0);
         }
     } bst;
+
     struct QueryState {
         std::vector<int> vis;
         std::vector<int> next;
@@ -565,6 +595,7 @@ namespace bs {
         std::fill(qs.vis.begin(), qs.vis.end(), 0);
         vis_cur = 1;
     }
+
     struct QueryStateSupplement {
         std::vector<int> l_next;
         std::vector<uint8_t> topology;
@@ -574,23 +605,24 @@ namespace bs {
             topology.assign(n, 0);
         }
     } qsSup;
+
     struct PathStateBits {
-        vector<uint32_t> path_bits; 
+        vector<uint32_t> path_bits;
 
         void init(const int &n, const int &L) {
             path_bits.assign(n * L, 0u);
         }
 
         uint32_t *pl(const int &v) {
-            return &path_bits[(size_t) v * (size_t) label_hash_len];
+            return &path_bits[static_cast<size_t>(v) * static_cast<size_t>(label_hash_len)];
         }
 
         [[nodiscard]] const uint32_t *pl(const int &v) const {
-            return &path_bits[(size_t) v * (size_t) label_hash_len];
+            return &path_bits[static_cast<size_t>(v) * static_cast<size_t>(label_hash_len)];
         }
 
         [[nodiscard]] bool is_subset(const int &v, const vector<uint32_t> &tps) const {
-            const int vps = (size_t) v * (size_t) label_hash_len;
+            const int vps = static_cast<size_t>(v) * static_cast<size_t>(label_hash_len);
             for (int i = 0; i < label_hash_len; ++i) {
                 if ((path_bits[vps + i] & tps[i]) != tps[i]) {
                     return false;
@@ -599,19 +631,20 @@ namespace bs {
             return true;
         }
     } ps;
+
     struct PathStateExact {
-        vector<int> path_label_seq; 
-        vector<uint8_t> label_pos; 
+        vector<int> path_label_seq;
+        vector<uint8_t> label_pos;
         vector<int> touched_labels;
-        vector<int> first_matched_pos; 
-        uint8_t target_bits{}; 
-        uint8_t current_bits{}; 
-        vector<vector<uint8_t> > visited_vertex; 
-        vector<int> touched_vertices; 
+        vector<int> first_matched_pos;
+        uint8_t target_bits{};
+        uint8_t current_bits{};
+        vector<vector<uint8_t> > visited_vertex;
+        vector<int> touched_vertices;
 
         inline void init(const std::vector<int> &idsL) {
-            int n = (int) idsL.size();
-            if (label_pos.size() != (size_t) num_L) {
+            const int n = static_cast<int>(idsL.size());
+            if (label_pos.size() != static_cast<size_t>(num_L)) {
                 label_pos.assign(num_L, 255);
             } else {
                 for (int l: touched_labels) label_pos[l] = 255;
@@ -640,13 +673,13 @@ namespace bs {
             touched_vertices.clear();
         }
 
-        inline bool should_push_label(const int &l, const int &p) {
-            uint8_t index = label_pos[l];
+        [[nodiscard]] bool should_push_label(const int &l, const int &p) const {
+            const uint8_t index = label_pos[l];
             if (index == 255) return false;
             return first_matched_pos[index] > p;
         }
 
-        inline void push_label(const int &l, const bool &flag, const int &p) {
+        void push_label(const int &l, const bool &flag, const int &p) {
             if (flag) {
                 uint8_t index = label_pos[l];
                 first_matched_pos[index] = p;
@@ -657,7 +690,7 @@ namespace bs {
             }
         }
 
-        inline bool should_revisit(const int &uid, const int &l, const bool &flag) {
+        bool should_revisit(const int &uid, const int &l, const bool &flag) {
             uint8_t new_bits = current_bits;
             if (flag) {
                 uint8_t index = label_pos[l];
@@ -674,7 +707,7 @@ namespace bs {
             return true;
         }
 
-        inline void pop_label(const int &uid) {
+        void pop_label(const int &uid) {
             if (visited_vertex[uid].empty()) touched_vertices.push_back(uid);
             visited_vertex[uid].push_back(current_bits);
             if (path_label_seq.empty()) return;
@@ -687,85 +720,20 @@ namespace bs {
             }
         }
     } psExact;
+
     struct SequenceQueryState {
-        int need_pos{}; 
-        int num{}; 
-        vector<vector<int> > matched_label; 
-        vector<int> touched_vertices; 
-        vector<int> alternative; 
-        vector<int> touched_alternative; 
-        void init(const std::vector<int> &idsSeq) {
-            num = (int) idsSeq.size();
-            need_pos = 0;
-            if (matched_label.size() != (size_t) num_V) {
-                matched_label.clear();
-                matched_label.resize(num_V);
-            } else {
-                for (int uid: touched_vertices) matched_label[uid].clear();
-            }
-            touched_vertices.clear();
-            if (alternative.size() != (size_t) num_V) {
-                alternative.assign(num_V, -1);
-            } else {
-                for (int uid: touched_alternative) alternative[uid] = -1;
-            }
-            touched_alternative.clear();
-        }
-
-        inline void push_label_seq1(const int &uid, const int &l, const std::vector<int> &idsSeq) {
-            if (matched_label[uid].empty()) touched_vertices.push_back(uid);
-            matched_label[uid].push_back(l);
-            if (l == idsSeq[need_pos]) {
-                need_pos = (need_pos < num - 1) ? (need_pos + 1) : need_pos;
-            }
-        }
-
-        inline void push_label_seq2(const int &uid, const int &l) {
-            if (matched_label[uid].empty()) touched_vertices.push_back(uid);
-            matched_label[uid].push_back(l);
-            need_pos = (need_pos + 1) % num;
-        }
-
-        inline void pop_label_seq1(const int &uid, const std::vector<int> &idsSeq) {
-            if (matched_label[uid].empty()) return;
-            int current_label = matched_label[uid].back();
-            int check_pos = (need_pos > 0) ? (need_pos - 1) : need_pos;
-            if (current_label != idsSeq[check_pos] && current_label != idsSeq[num - 1]) {
-                need_pos = check_pos;
-            }
-        }
-
-        inline void pop_label_seq2() {
-            need_pos = (need_pos - 1 + num) % num;
-        }
-
-        inline bool should_revisit(const int &uid, const int &l) {
-            for (auto old_match: matched_label[uid]) {
-                if (old_match == l) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        inline bool accept(const int &uid, const std::vector<int> &idsSeq) {
+        int need_pos{};
+        int num{};
+        vector<vector<int> > matched_label;
+        bool accept(const int &uid, const std::vector<int> &idsSeq) const {
             return !matched_label[uid].empty() && matched_label[uid].back() == idsSeq[num - 1];
         }
-
-        inline void set_alternative(const int &uid, const int &l) {
-            if (alternative[uid] == -1) touched_alternative.push_back(uid);
-            alternative[uid] = l;
-        }
-
-        inline int take_alternative(const int &uid) {
-            int l = alternative[uid];
-            alternative[uid] = -1;
-            return l;
-        }
     } sqs;
-    enum class Mode { WholePath, AllLabel, Sequence1, Sequence2 };
+
+    enum class Mode { WholePath, AllLabel };
 
     enum class LabelMatch { AND, OR, NOT, LCR };
+
     template<LabelMatch LM>
     struct LabelMatcher {
         static bool prune_by_bits(const uint32_t &vertex_bits,
@@ -781,6 +749,7 @@ namespace bs {
                 return (vertex_bits & required_bits) == 0;
             }
         }
+
         static bool feasible_bits(int &l_next, const int &end_pos,
                                   uint32_t *v_ps,
                                   const vector<uint32_t> &bitsL) {
@@ -798,8 +767,7 @@ namespace bs {
                         return true;
                     }
                 } else {
-                    bool label_in_path = ((v_ps[p] & mask) != 0);
-                    if (label_in_query && !label_in_path) {
+                    if (bool label_in_path = ((v_ps[p] & mask) != 0); label_in_query && !label_in_path) {
                         l_next = i + 1;
                         v_ps[p] |= mask;
                         return true;
@@ -828,8 +796,7 @@ namespace bs {
                     }
                 } else {
                     if (label_in_query) {
-                        bool should_push = psExact.should_push_label(tl, pos);
-                        if (should_push) {
+                        if (bool should_push = psExact.should_push_label(tl, pos)) {
                             l_next = i + 1;
                             return true;
                         }
@@ -841,6 +808,7 @@ namespace bs {
             }
             return false;
         }
+
         static bool accept_bits(const uint32_t &path_bits,
                                 const uint32_t &required_bits) {
             if constexpr (LM == LabelMatch::AND) {
@@ -863,6 +831,7 @@ namespace bs {
             }
         }
     };
+
     struct QueryForwardWords {
         const VertexIndexV *index;
 
@@ -878,6 +847,7 @@ namespace bs {
         bool root;
         int t_in, t_out, group;
         uint32_t leaf_hash;
+        int uid;
         const vector<uint32_t> &vertices_all, &labels_all;
         QueryHorizontalWords vertices_group, labels_group;
         QueryForwardWords labels_forward;
@@ -890,11 +860,12 @@ namespace bs {
         const VertexIndexV *v = enable_forward_pruning() ? &indices_vertical[uid] : nullptr;
         const int group = base.leaf ? -1 : (h != nullptr ? h->group : (v != nullptr ? v->group : 1));
         return {
-            base.root, base.t_in, base.t_out, group, base.leaf ? base.leaf_hash() : 0,
+            base.root, base.t_in, base.t_out, group, base.leaf ? base.leaf_hash() : 0, uid,
             base.leaf ? empty : base.vertices_all(), base.labels_all,
             {h, true}, {h, false}, {v}
         };
     }
+
     template<Mode M, LabelMatch LM, bool UseExact = false>
     class ReachabilitySearcher {
     public:
@@ -907,8 +878,9 @@ namespace bs {
 
     private:
         using matcher = LabelMatcher<LM>;
-        [[nodiscard]] bool vertex_prune(const QueryIndexView &U, const QueryIndexView &V) const {
-            if (!enable_base_pruning()) return false;
+        [[nodiscard]] static bool vertex_prune(const QueryIndexView &U, const QueryIndexView &V) {
+            if (!enable_base_pruning() || !(pruning_benefit[U.uid] & BASE_VERTEX)) return false;
+
             if (V.group < 0) {
                 uint32_t vh = V.leaf_hash;
                 int blk = vertex_hash_block(vh);
@@ -916,6 +888,7 @@ namespace bs {
                 bool flag = (U.vertices_all[blk] & (1u << bit)) == 0;
                 return flag;
             }
+
             for (int i = 0; i < vertex_hash_len; ++i) {
                 if ((U.vertices_all[i] & V.vertices_all[i]) != V.vertices_all[i]) {
                     return true;
@@ -923,8 +896,9 @@ namespace bs {
             }
             return false;
         }
+
         [[nodiscard]] bool label_prune_not_sequence(const int &uid, const std::vector<uint32_t> &bitsL) const {
-            if (!enable_base_pruning()) return false;
+            if (!enable_base_pruning() || !(pruning_benefit[uid] & BASE_LABEL)) return false;
 
             const QueryIndexView U = query_index_view(uid);
             for (int i = 0; i < label_hash_len; ++i) {
@@ -940,14 +914,15 @@ namespace bs {
 
             return LM != LabelMatch::AND;
         }
-        [[nodiscard]] bool label_prune_sequences(const QueryIndexView &U,
-                                                 const int &needed_pos,
-                                                 const std::vector<int> &idsSeq) const {
-            if (!enable_base_pruning()) return false;
 
-            int n = (int) idsSeq.size();
+        [[nodiscard]] static bool label_prune_sequences(const QueryIndexView &U,
+                                                        const int &needed_pos,
+                                                        const std::vector<int> &idsSeq) {
+            if (!enable_base_pruning() || !(pruning_benefit[U.uid] & BASE_LABEL)) return false;
+
+            const int n = static_cast<int>(idsSeq.size());
             for (int i = needed_pos; i < n; ++i) {
-                int l = idsSeq[i];
+                const int l = idsSeq[i];
                 const int p = lht.p[l];
                 if ((U.labels_all[p] & lht.mask[l]) == 0) {
                     return true;
@@ -955,10 +930,12 @@ namespace bs {
             }
             return false;
         }
-        [[nodiscard]] bool group_vertex_prune(const QueryIndexView &U,
-                                              const QueryIndexView &V,
-                                              const int &gid) const {
-            if (!enable_group_pruning()) return false;
+
+        [[nodiscard]] static bool group_vertex_prune(const QueryIndexView &U,
+                                                     const QueryIndexView &V,
+                                                     const int &gid) {
+            if (!enable_group_pruning() || !(pruning_benefit[U.uid] & H_VERTEX)) return false;
+
             if (V.group < 0) {
                 uint32_t vh = V.leaf_hash;
                 int blk = vertex_hash_block(vh);
@@ -967,6 +944,7 @@ namespace bs {
                 bool flag = (temp & (1u << bit)) == 0;
                 return flag;
             }
+
             for (int i = 0; i < vertex_hash_len; ++i) {
                 uint32_t temp = U.vertices_group[gid * vertex_hash_len + i];
                 if ((temp & V.vertices_all[i]) != V.vertices_all[i]) {
@@ -975,16 +953,17 @@ namespace bs {
             }
             return false;
         }
+
         [[nodiscard]] bool group_label_prune(const int &uid,
                                              const std::vector<uint32_t> &bitsL,
                                              const int &gid) const {
-            if (!enable_group_pruning()) return false;
+            if (!enable_group_pruning() || !(pruning_benefit[uid] & H_LABEL)) return false;
 
             const QueryIndexView U = query_index_view(uid);
             int index = gid * label_hash_len;
             for (int i = 0; i < label_hash_len; ++i) {
                 uint32_t vertex_bits = U.labels_group[index + i];
-                bool missing = matcher::prune_by_bits(vertex_bits, ps.pl(uid)[i], bitsL[i]);
+                const bool missing = matcher::prune_by_bits(vertex_bits, ps.pl(uid)[i], bitsL[i]);
                 if constexpr (LM == LabelMatch::AND) {
                     if (missing) return true;
                 } else {
@@ -994,10 +973,11 @@ namespace bs {
 
             return LM != LabelMatch::AND;
         }
+
         [[nodiscard]] bool forward_label_prune_all_labels(const int &gid,
                                                           const QueryIndexView &U,
                                                           const std::vector<uint32_t> &bitsL) const {
-            if (!enable_forward_pruning()) return false;
+            if (!enable_forward_pruning() || source_offset[U.uid + 1] - source_offset[U.uid] < 8) return false;
 
             int index = gid * (forward_default_k * label_hash_len);
             for (int i = 0; i < label_hash_len; ++i) {
@@ -1009,11 +989,13 @@ namespace bs {
 
             return true;
         }
-        [[nodiscard]] bool forward_label_prune_sequence1(const int &gid, const QueryIndexView &U,
-                                                         const std::vector<int> &idsSeq) const {
-            if (!enable_forward_pruning()) return false;
-            int index = gid * (forward_default_k * label_hash_len);
-            int needed_pos = sqs.need_pos;
+
+        [[nodiscard]] static bool forward_label_prune_sequence1(const int &gid, const QueryIndexView &U,
+                                                                const std::vector<int> &idsSeq) {
+            if (!enable_forward_pruning() || source_offset[U.uid + 1] - source_offset[U.uid] < 8) return false;
+
+            const int index = gid * (forward_default_k * label_hash_len);
+            const int needed_pos = sqs.need_pos;
             const int needed_label = idsSeq[needed_pos];
             int p = lht.p[needed_label];
             if ((U.labels_forward[index + p] & lht.mask[needed_label]) != 0) {
@@ -1028,16 +1010,18 @@ namespace bs {
 
             return true;
         }
-        [[nodiscard]] bool forward_label_prune_sequence2(const int &gid, const QueryIndexView &U,
-                                                         const std::vector<int> &idsSeq) const {
-            if (!enable_forward_pruning()) return false;
+
+        [[nodiscard]] static bool forward_label_prune_sequence2(const int &gid, const QueryIndexView &U,
+                                                                const std::vector<int> &idsSeq) {
+            if (!enable_forward_pruning() || source_offset[U.uid + 1] - source_offset[U.uid] < 8) return false;
 
             int needed_pos = sqs.need_pos;
             const int steps = std::min(forward_default_k, sqs.num - needed_pos);
 
             if (steps <= 0) {
-                return false; 
+                return false;
             }
+
             for (int i = 0; i < steps; ++i) {
                 int temp = gid * (forward_default_k * label_hash_len) + i * label_hash_len;
                 int tl = idsSeq[needed_pos + i];
@@ -1048,6 +1032,7 @@ namespace bs {
             }
             return false;
         }
+
         [[nodiscard]] bool label_accept_check(const int &uid, const std::vector<uint32_t> &bitsL) const {
             if constexpr (UseExact) {
                 return matcher::accept_exact(psExact.current_bits, psExact.target_bits);
@@ -1069,7 +1054,7 @@ namespace bs {
 
         int feasible_sequence1(const int &uid, const std::vector<int> &idsSeq, int &l1, int &l2) {
             bool flag1 = false, flag2 = false;
-            int check_pos = (sqs.need_pos > 0) ? (sqs.need_pos - 1) : sqs.need_pos;
+            const int check_pos = (sqs.need_pos > 0) ? (sqs.need_pos - 1) : sqs.need_pos;
             int endLabel = -1;
             if (!sqs.matched_label[uid].empty()) endLabel = sqs.matched_label[uid].back();
             bool endPos = (endLabel == idsSeq[sqs.num - 1]);
@@ -1101,12 +1086,14 @@ namespace bs {
             }
             return false;
         }
-        bool search_impl(int uid, int vid,
+
+        bool search_impl(const int uid, const int vid,
                          const std::vector<uint32_t> &bitsL,
                          const std::vector<int> &idsL,
                          const std::vector<int> &idsSeq) {
             const QueryIndexView V = query_index_view(vid);
             if (V.root && uid != vid) return false;
+
             ensure_search_stack_capacity(s_pos + 1);
             s[s_pos] = uid;
             bool isAdd = true;
@@ -1115,16 +1102,10 @@ namespace bs {
                 std::memset(ps.pl(uid), 0u, label_hash_len * sizeof(uint32_t));
                 if constexpr (UseExact) psExact.init(idsL);
             }
-            if constexpr (M == Mode::Sequence1 || M == Mode::Sequence2) {
-                sqs.init(idsSeq);
-            }
 
             while (s_pos != -1) {
                 int top_uid = s[s_pos];
                 QueryIndexView top_u = query_index_view(top_uid);
-                if constexpr (M == Mode::Sequence1) {
-                    sqs.pop_label_seq1(top_uid, idsSeq);
-                }
 
                 if (isAdd) {
                     isAdd = false;
@@ -1132,6 +1113,7 @@ namespace bs {
                     if constexpr (M != Mode::AllLabel) {
                         qsSup.topology[top_uid] = true;
                     }
+
                     if (top_uid == vid) {
                         if constexpr (M == Mode::AllLabel) {
                             return true;
@@ -1149,20 +1131,15 @@ namespace bs {
                         if constexpr (M == Mode::WholePath && UseExact) {
                             psExact.pop_label(top_uid);
                         }
-                        if constexpr (M == Mode::Sequence2) {
-                            sqs.pop_label_seq2();
-                        }
                         continue;
                     }
+
                     if (top_u.group < 0) {
                         if constexpr (M != Mode::AllLabel) {
                             qsSup.topology[top_uid] = false;
                         }
                         if constexpr (M == Mode::WholePath && UseExact) {
                             psExact.pop_label(top_uid);
-                        }
-                        if constexpr (M == Mode::Sequence2) {
-                            sqs.pop_label_seq2();
                         }
                         qs.vis[top_uid] = vis_cur + 1;
                         --s_pos;
@@ -1176,9 +1153,6 @@ namespace bs {
                         if constexpr (M == Mode::WholePath && UseExact) {
                             psExact.pop_label(top_uid);
                         }
-                        if constexpr (M == Mode::Sequence2) {
-                            sqs.pop_label_seq2();
-                        }
 
                         qs.vis[top_uid] = vis_cur + 1;
                         --s_pos;
@@ -1189,34 +1163,22 @@ namespace bs {
                             V.t_out <= top_u.t_out && label_accept_check(top_uid, bitsL))
                             return true;
                     }
-                    if constexpr (M == Mode::Sequence1 || M == Mode::Sequence2) {
-                        if (label_prune_sequences(top_u, sqs.need_pos, idsSeq)) {
-                            qs.vis[top_uid] = vis_cur + 1;
-                            if constexpr (M == Mode::Sequence2) {
-                                sqs.pop_label_seq2();
-                            }
-                            --s_pos;
-                            continue;
+
+                    if (label_prune_not_sequence(top_uid, bitsL)) {
+                        if constexpr (M == Mode::WholePath && UseExact) {
+                            psExact.pop_label(top_uid);
                         }
-                    } else {
-                        if (label_prune_not_sequence(top_uid, bitsL)) {
-                            if constexpr (M == Mode::WholePath && UseExact) {
-                                psExact.pop_label(top_uid);
-                            }
-                            qs.vis[top_uid] = vis_cur + 1;
-                            --s_pos;
-                            continue;
-                        }
+                        qs.vis[top_uid] = vis_cur + 1;
+                        --s_pos;
+                        continue;
                     }
+
                     if (vertex_prune(top_u, V)) {
                         if constexpr (M != Mode::AllLabel) {
                             qsSup.topology[top_uid] = false;
                         }
                         if constexpr (M == Mode::WholePath && UseExact) {
                             psExact.pop_label(top_uid);
-                        }
-                        if constexpr (M == Mode::Sequence2) {
-                            sqs.pop_label_seq2();
                         }
                         qs.vis[top_uid] = vis_cur + 1;
                         --s_pos;
@@ -1238,13 +1200,7 @@ namespace bs {
                             qs.next[top_uid] = source_offset[top_uid + 1];
                         } else {
                             bool flag = false;
-                            if constexpr (M == Mode::AllLabel) {
-                                flag = forward_label_prune_all_labels(0, top_u, bitsL);
-                            } else if constexpr (M == Mode::Sequence1) {
-                                flag = forward_label_prune_sequence1(0, top_u, idsSeq);
-                            } else {
-                                flag = forward_label_prune_sequence2(0, top_u, idsSeq);
-                            }
+                            flag = forward_label_prune_all_labels(0, top_u, bitsL);
                             if (flag) {
                                 qs.vis[top_uid] = vis_cur + 1;
                                 --s_pos;
@@ -1255,6 +1211,7 @@ namespace bs {
                         }
                     }
                 }
+
                 bool finished = true;
                 while (qs.gid[top_uid] < top_u.group) {
                     if (qs.next[top_uid] >= source_offset[top_uid + 1]) {
@@ -1262,32 +1219,26 @@ namespace bs {
                         if (qs.gid[top_uid] == top_u.group) break;
                         if constexpr (M == Mode::AllLabel) {
                             if (forward_label_prune_all_labels(qs.gid[top_uid], top_u, bitsL)) continue;
-                        } else if constexpr (M == Mode::Sequence1) {
-                            if (forward_label_prune_sequence1(qs.gid[top_uid], top_u, idsSeq)) continue;
-                        } else if constexpr (M == Mode::Sequence2) {
-                            if (forward_label_prune_sequence2(qs.gid[top_uid], top_u, idsSeq)) continue;
                         } else {
                             if (group_label_prune(top_uid, bitsL, qs.gid[top_uid])) continue;
                         }
+
                         if (group_vertex_prune(top_u, V, qs.gid[top_uid])) {
                             continue;
                         }
                         qs.next[top_uid] = source_offset[top_uid] + qs.gid[top_uid];
                         finished = false;
                         break;
-                    } else {
-                        finished = false;
-                        break;
                     }
+                    finished = false;
+                    break;
                 }
                 while (qs.next[top_uid] < source_offset[top_uid + 1]) {
                     const int edge_idx = qs.next[top_uid];
-                    ++query_edge_visits;
-                    if constexpr (M != Mode::AllLabel) {
-                        if (qs.label_edge[top_uid] != edge_idx) {
-                            qs.label_edge[top_uid] = edge_idx;
-                            qsSup.l_next[top_uid] = target_offset[edge_idx];
-                        }
+                    if (qs.label_edge[top_uid] != edge_idx) {
+                        ++query_edge_visits;
+                        qs.label_edge[top_uid] = edge_idx;
+                        if constexpr (M != Mode::AllLabel) qsSup.l_next[top_uid] = target_offset[edge_idx];
                     }
                     int tid = targets[edge_idx];
                     if constexpr (M == Mode::AllLabel) {
@@ -1313,152 +1264,68 @@ namespace bs {
                         qs.next[top_uid] += top_u.group;
                     } else {
                         if (qs.vis[tid] < vis_cur) {
-                            if constexpr (M == Mode::WholePath) {
-                                qsSup.l_next[top_uid] = target_offset[edge_idx];
-                                if constexpr (UseExact) {
-                                    int tl = 0;
+                            qsSup.l_next[top_uid] = target_offset[edge_idx];
+                            if constexpr (UseExact) {
+                                int tl = 0;
+                                memcpy(ps.pl(tid), ps.pl(top_uid), sizeof(uint32_t) * label_hash_len);
+                                bool flag = matcher::feasible_exact(qsSup.l_next[top_uid],
+                                                                    target_offset[edge_idx + 1],
+                                                                    idsL, tl, s_pos);
+                                psExact.push_label(tl, flag, s_pos);
+                                if (flag) {
+                                    const int p = lht.p[tl];
+                                    ps.pl(tid)[p] |= lht.mask[tl];
+                                }
+                            } else {
+                                memcpy(ps.pl(tid), ps.pl(top_uid), sizeof(uint32_t) * label_hash_len);
+                                bool flag = matcher::feasible_bits(qsSup.l_next[top_uid],
+                                                                   target_offset[edge_idx + 1],
+                                                                   ps.pl(tid), bitsL);
+                            }
+                            isAdd = true;
+                            ensure_search_stack_capacity(s_pos + 2);
+                            s[++s_pos] = tid;
+                            finished = false;
+                            break;
+                        }
+                        if (qs.vis[tid] > vis_cur && qsSup.topology[tid]) {
+                            if constexpr (UseExact) {
+                                int tl = 0;
+                                bool flag = matcher::feasible_exact(qsSup.l_next[top_uid],
+                                                                    target_offset[edge_idx + 1],
+                                                                    idsL, tl, s_pos);
+                                if (psExact.should_revisit(tid, tl, flag)) {
+                                    isAdd = true;
+                                    ensure_search_stack_capacity(s_pos + 2);
+                                    s[++s_pos] = tid;
+                                    finished = false;
                                     memcpy(ps.pl(tid), ps.pl(top_uid), sizeof(uint32_t) * label_hash_len);
-                                    bool flag = matcher::feasible_exact(qsSup.l_next[top_uid],
-                                                                        target_offset[edge_idx + 1],
-                                                                        idsL, tl, s_pos);
                                     psExact.push_label(tl, flag, s_pos);
                                     if (flag) {
                                         const int p = lht.p[tl];
                                         ps.pl(tid)[p] |= lht.mask[tl];
                                     }
-                                } else {
-                                    memcpy(ps.pl(tid), ps.pl(top_uid), sizeof(uint32_t) * label_hash_len);
-                                    bool flag = matcher::feasible_bits(qsSup.l_next[top_uid],
-                                                                       target_offset[edge_idx + 1],
-                                                                       ps.pl(tid), bitsL);
-                                }
-                                isAdd = true;
-                                ensure_search_stack_capacity(s_pos + 2);
-                                s[++s_pos] = tid;
-                                finished = false;
-                                break;
-                            } else if constexpr (M == Mode::Sequence1) {
-                                int l1 = -1, l2 = -1;
-                                const int r = feasible_sequence1(top_uid, idsSeq, l1, l2);
-                                if (r == 3) {
-                                    sqs.push_label_seq1(tid, l1, idsSeq);
-                                    sqs.set_alternative(tid, l2);
-                                } else if (r == 2) {
-                                    sqs.push_label_seq1(tid, l2, idsSeq);
-                                } else if (r == 1) {
-                                    sqs.push_label_seq1(tid, l1, idsSeq);
-                                }
-                                if (r != 0) {
-                                    isAdd = true;
-                                    ensure_search_stack_capacity(s_pos + 2);
-                                    s[++s_pos] = tid;
-                                    finished = false;
                                     break;
                                 }
                             } else {
-                                if (feasible_sequence2(top_uid, idsSeq)) {
+                                uint32_t *tps = qs.scratch_bits.data();
+                                memcpy(tps, ps.pl(top_uid), sizeof(uint32_t) * label_hash_len);
+                                bool flag = matcher::feasible_bits(qsSup.l_next[top_uid],
+                                                                   target_offset[edge_idx + 1],
+                                                                   tps, bitsL);
+                                bool subset = true;
+                                const uint32_t *old_bits = ps.pl(tid);
+                                for (int bi = 0; bi < label_hash_len; ++bi) {
+                                    if ((old_bits[bi] & tps[bi]) != tps[bi]) {
+                                        subset = false;
+                                        break;
+                                    }
+                                }
+                                if (!subset) {
+                                    memcpy(ps.pl(tid), tps, sizeof(uint32_t) * label_hash_len);
                                     isAdd = true;
                                     ensure_search_stack_capacity(s_pos + 2);
                                     s[++s_pos] = tid;
-                                    sqs.push_label_seq2(tid, idsSeq[sqs.need_pos]);
-                                    finished = false;
-                                    break;
-                                }
-                            }
-                        } else if (qs.vis[tid] > vis_cur && qsSup.topology[tid]) {
-                            if constexpr (M == Mode::WholePath) {
-                                if constexpr (UseExact) {
-                                    int tl = 0;
-                                    bool flag = matcher::feasible_exact(qsSup.l_next[top_uid],
-                                                                        target_offset[edge_idx + 1],
-                                                                        idsL, tl, s_pos);
-                                    if (psExact.should_revisit(tid, tl, flag)) {
-                                        isAdd = true;
-                                        ensure_search_stack_capacity(s_pos + 2);
-                                        s[++s_pos] = tid;
-                                        finished = false;
-                                        memcpy(ps.pl(tid), ps.pl(top_uid), sizeof(uint32_t) * label_hash_len);
-                                        psExact.push_label(tl, flag, s_pos);
-                                        if (flag) {
-                                            const int p = lht.p[tl];
-                                            ps.pl(tid)[p] |= lht.mask[tl];
-                                        }
-                                        break;
-                                    }
-                                } else {
-                                    uint32_t *tps = qs.scratch_bits.data();
-                                    memcpy(tps, ps.pl(top_uid), sizeof(uint32_t) * label_hash_len);
-                                    bool flag = matcher::feasible_bits(qsSup.l_next[top_uid],
-                                                                       target_offset[edge_idx + 1],
-                                                                       tps, bitsL);
-                                    bool subset = true;
-                                    const uint32_t *old_bits = ps.pl(tid);
-                                    for (int bi = 0; bi < label_hash_len; ++bi) {
-                                        if ((old_bits[bi] & tps[bi]) != tps[bi]) {
-                                            subset = false;
-                                            break;
-                                        }
-                                    }
-                                    if (!subset) {
-                                        memcpy(ps.pl(tid), tps, sizeof(uint32_t) * label_hash_len);
-                                        isAdd = true;
-                                        ensure_search_stack_capacity(s_pos + 2);
-                                        s[++s_pos] = tid;
-                                        finished = false;
-                                        break;
-                                    }
-                                }
-                            } else if constexpr (M == Mode::Sequence1) {
-                                if (sqs.alternative[tid] != -1) {
-                                    int l = sqs.take_alternative(tid);
-                                    if (sqs.should_revisit(tid, l)) {
-                                        sqs.push_label_seq1(tid, l, idsSeq);
-                                        isAdd = true;
-                                        ensure_search_stack_capacity(s_pos + 2);
-                                        s[++s_pos] = tid;
-                                        finished = false;
-                                        qs.next[top_uid] += top_u.group;
-                                        break;
-                                    }
-                                } else {
-                                    int l1 = -1, l2 = -1;
-                                    const int r = feasible_sequence1(top_uid, idsSeq, l1, l2);
-                                    bool flag = false;
-                                    if (r == 3) {
-                                        if (sqs.should_revisit(tid, l1)) {
-                                            sqs.push_label_seq1(tid, l1, idsSeq);
-                                            flag = true;
-                                            if (sqs.should_revisit(tid, l2)) sqs.set_alternative(tid, l2);
-                                        } else if (sqs.should_revisit(tid, l2)) {
-                                            sqs.push_label_seq1(tid, l2, idsSeq);
-                                            flag = true;
-                                        }
-                                    } else if (r == 2) {
-                                        if (sqs.should_revisit(tid, l2)) {
-                                            sqs.push_label_seq1(tid, l2, idsSeq);
-                                            flag = true;
-                                        }
-                                    } else if (r == 1) {
-                                        if (sqs.should_revisit(tid, l1)) {
-                                            sqs.push_label_seq1(tid, l1, idsSeq);
-                                            flag = true;
-                                        }
-                                    }
-                                    if (flag) {
-                                        isAdd = true;
-                                        ensure_search_stack_capacity(s_pos + 2);
-                                        s[++s_pos] = tid;
-                                        finished = false;
-                                        break;
-                                    }
-                                }
-                            } else {
-                                if (feasible_sequence2(top_uid, idsSeq) && sqs.
-                                    should_revisit(tid, idsSeq[sqs.need_pos])) {
-                                    isAdd = true;
-                                    ensure_search_stack_capacity(s_pos + 2);
-                                    s[++s_pos] = tid;
-                                    sqs.push_label_seq2(tid, idsSeq[sqs.need_pos]);
                                     finished = false;
                                     break;
                                 }
@@ -1473,20 +1340,192 @@ namespace bs {
                 }
 
                 if (finished) {
-                    --s_pos; 
+                    --s_pos;
                     qs.vis[top_uid] = vis_cur + 1;
                     isAdd = false;
                     if constexpr (M == Mode::WholePath && UseExact) {
                         psExact.pop_label(top_uid);
-                    }
-                    if constexpr (M == Mode::Sequence2) {
-                        sqs.pop_label_seq2();
                     }
                 }
             }
             return false;
         }
     };
+
+    template<bool Cyclic>
+    bool search_rpq(const int origin, const int destination, const vector<int> &seq) {
+        if (seq.empty()) return false;
+        const int length = static_cast<int>(seq.size());
+        const size_t width = Cyclic ? seq.size() : seq.size() + 1;
+        static vector<uint32_t> vertex_epoch, large_marks;
+        static vector<uint64_t> state_bits;
+        static vector<uint8_t> reachable;
+        static vector<int> last_missing;
+        static uint32_t epoch = 0;
+        if (vertex_epoch.size() != static_cast<size_t>(num_V)) {
+            vertex_epoch.assign(num_V, 0);
+            state_bits.resize(num_V);
+            reachable.resize(num_V);
+            last_missing.resize(num_V);
+            large_marks.clear();
+            epoch = 0;
+        }
+        if (++epoch == 0) {
+            std::fill(vertex_epoch.begin(), vertex_epoch.end(), 0);
+            std::fill(large_marks.begin(), large_marks.end(), 0);
+            epoch = 1;
+        }
+        if (width > 64) {
+            if (static_cast<size_t>(num_V) > SIZE_MAX / width)
+                throw std::length_error("RPQ state space too large");
+            const size_t count = static_cast<size_t>(num_V) * width;
+            if (large_marks.size() < count) large_marks.resize(count, 0);
+        }
+        const bool base_pruning = enable_base_pruning();
+        const bool forward_pruning = enable_forward_pruning();
+        const bool horizontal_pruning = enable_group_pruning();
+        const QueryIndexView target_view = query_index_view(destination);
+        const auto &target_base = indices_base[destination];
+        struct Frame {
+            int vertex, position, edge, label, gid, groups;
+        };
+        static vector<Frame> stack;
+        stack.clear();
+        auto push = [&](int vertex, int position) {
+            if (vertex == destination && position == length) return true;
+            if constexpr (Cyclic) { if (position == length) position = 0; }
+            if (vertex_epoch[vertex] != epoch) {
+                vertex_epoch[vertex] = epoch;
+                state_bits[vertex] = 0;
+                reachable[vertex] = 1;
+                last_missing[vertex] = -1;
+                if (base_pruning) {
+                    const auto &u = indices_base[vertex];
+                    if (u.leaf || (vertex != destination && target_base.root) || u.t_out < target_base.t_out) {
+                        reachable[vertex] = 0;
+                    } else if (vertex != destination && (pruning_benefit[vertex] & BASE_VERTEX)) {
+                        if (target_base.leaf) {
+                            const uint32_t hash = target_base.leaf_hash();
+                            reachable[vertex] = (u.vertices_all()[vertex_hash_block(hash)] &
+                                                 (1u << vertex_hash_bit(hash))) != 0;
+                        } else {
+                            for (int i = 0; i < vertex_hash_len; ++i)
+                                if ((u.vertices_all()[i] & target_base.vertices_all()[i]) != target_base.vertices_all()[
+                                        i]) {
+                                    reachable[vertex] = 0;
+                                    break;
+                                }
+                        }
+                    }
+                }
+                if (base_pruning && (pruning_benefit[vertex] & BASE_LABEL)) {
+                    const auto &u = indices_base[vertex];
+                    for (int i = length - 1; i >= 0; --i)
+                        if (!(u.labels_all[lht.p[seq[i]]] & lht.mask[seq[i]])) {
+                            last_missing[vertex] = i;
+                            break;
+                        }
+                }
+            }
+            if (!reachable[vertex] || position <= last_missing[vertex]) return false;
+            if (width <= 64) {
+                const uint64_t bit = static_cast<uint64_t>(1) << position;
+                if (state_bits[vertex] & bit) return false;
+                state_bits[vertex] |= bit;
+            } else {
+                const size_t key = static_cast<size_t>(vertex) * width + position;
+                if (large_marks[key] == epoch) return false;
+                large_marks[key] = epoch;
+            }
+
+            int groups = 1;
+            if (horizontal_pruning) groups = std::max(1, indices_horizontal[vertex].group);
+            else if (forward_pruning) groups = std::max(1, indices_vertical[vertex].group);
+            const bool direct = source_offset[vertex + 1] - source_offset[vertex] < 8;
+            if (direct) groups = 1;
+            stack.push_back({
+                vertex, position,
+                direct ? source_offset[vertex] : source_offset[vertex + 1],
+                direct ? target_offset[source_offset[vertex]] : 0,
+                direct ? 0 : -1, groups
+            });
+            return false;
+        };
+        if (push(origin, 0)) return true;
+        while (!stack.empty()) {
+            Frame &f = stack.back();
+            const int end = source_offset[f.vertex + 1];
+            if (f.edge >= end) {
+                bool found_group = false;
+                while (++f.gid < f.groups) {
+                    bool possible = true;
+                    if (horizontal_pruning && f.groups > 1 && (pruning_benefit[f.vertex] & H_VERTEX)) {
+                        const QueryIndexView u = query_index_view(f.vertex);
+                        if (target_base.leaf) {
+                            const uint32_t hash = target_base.leaf_hash();
+                            possible = (u.vertices_group[f.gid * vertex_hash_len + vertex_hash_block(hash)] &
+                                        (1u << vertex_hash_bit(hash))) != 0;
+                        } else {
+                            for (int w = 0; w < vertex_hash_len; ++w)
+                                if ((u.vertices_group[f.gid * vertex_hash_len + w] & target_view.vertices_all[w]) !=
+                                    target_view.vertices_all[w]) {
+                                    possible = false;
+                                    break;
+                                }
+                        }
+                        if (!possible) continue;
+                    }
+                    if (forward_pruning && (end - source_offset[f.vertex]) / f.groups >= 8) {
+                        const auto &v = indices_vertical[f.vertex];
+                        const int depth = forward_group_depth(v, f.gid);
+                        if (depth > 0) {
+                            auto has = [&](int layer, int label) {
+                                return (forward_layer_word(v, f.gid, layer, lht.p[label]) & lht.mask[label]) != 0;
+                            };
+                            if constexpr (Cyclic) {
+                                const int steps = std::min(depth, length - f.position);
+                                for (int i = 0; i < steps; ++i)
+                                    if (!has(i, seq[f.position + i])) {
+                                        possible = false;
+                                        break;
+                                    }
+                            } else {
+                                possible = (f.position < length && has(0, seq[f.position])) ||
+                                           (f.position > 0 && has(0, seq[f.position - 1]));
+                            }
+                        }
+                    }
+                    if (!possible) continue;
+                    f.edge = source_offset[f.vertex] + f.gid;
+                    if (f.edge >= end) continue;
+                    f.label = target_offset[f.edge];
+                    found_group = true;
+                    break;
+                }
+                if (!found_group) {
+                    stack.pop_back();
+                    continue;
+                }
+            }
+            const int edge = f.edge;
+            if (f.label == target_offset[edge]) ++query_edge_visits;
+            if (f.label == target_offset[edge + 1]) {
+                f.edge += f.groups;
+                if (f.edge < end) f.label = target_offset[f.edge];
+                continue;
+            }
+            const int label = labels[f.label++];
+            const int position = f.position;
+            const int target = targets[edge];
+            if constexpr (Cyclic) {
+                if (label == seq[position] && push(target, position + 1)) return true;
+            } else {
+                if (position > 0 && label == seq[position - 1] && push(target, position)) return true;
+                if (position < length && label == seq[position] && push(target, position + 1)) return true;
+            }
+        }
+        return false;
+    }
 
     class ReachableQuery {
         template<int Ptn>
@@ -1527,11 +1566,9 @@ namespace bs {
                 static ReachabilitySearcher<Mode::AllLabel, LabelMatch::LCR, true> searcher;
                 return searcher.search(uid, vid, bitsL, idsL, {});
             } else if constexpr (Ptn == 9) {
-                static ReachabilitySearcher<Mode::Sequence1, LabelMatch::AND> searcher;
-                return searcher.search(uid, vid, {}, {}, idsSeq);
+                return search_rpq<false>(uid, vid, idsSeq);
             } else if constexpr (Ptn == 10) {
-                static ReachabilitySearcher<Mode::Sequence2, LabelMatch::AND> searcher;
-                return searcher.search(uid, vid, {}, {}, idsSeq);
+                return search_rpq<true>(uid, vid, idsSeq);
             } else {
                 throw std::invalid_argument("Invalid ptn value");
             }
@@ -1557,6 +1594,7 @@ namespace bs {
             }
         }
     };
+
     bool read_graph(const string &filename) {
         const auto start_time = std::chrono::high_resolution_clock::now();
         ifstream file;
@@ -1659,6 +1697,7 @@ namespace bs {
         cout << endl;
         return true;
     }
+
     void DFS_out(const int &start) {
         s[s_pos] = start;
         bool isAdd = true;
@@ -1815,6 +1854,7 @@ namespace bs {
             }
         }
     }
+
     struct IndexBuildStats {
         double total_time = 0.0;
         long long index_size = 0;
@@ -1823,6 +1863,7 @@ namespace bs {
         long long index_space_vertical = 0;
         long long horizontal_uncompressed = 0;
     };
+
     void reset_index_state() {
         cur = 0;
         vis_cur += 2;
@@ -1843,6 +1884,7 @@ namespace bs {
         if (build_forward_label_index) indices_vertical.assign(num_V, VertexIndexV{});
         else vector<VertexIndexV>().swap(indices_vertical);
     }
+
     void prepare_baseline_traversal_state() {
         cur = 0;
         vis_cur += 2;
@@ -1865,9 +1907,11 @@ namespace bs {
         vector<VertexIndexH>().swap(indices_horizontal);
         vector<VertexIndexV>().swap(indices_vertical);
     }
+
     IndexBuildStats calculate_index_space() {
         IndexBuildStats stats;
         stats.horizontal_uncompressed = horizontal_dense_bytes;
+        stats.index_space_base += pruning_benefit.size() * sizeof(uint8_t);
         for (const auto &v: indices_base) {
             stats.index_space_base += sizeof(v.t_in) + sizeof(v.t_out);
             stats.index_space_base += static_cast<long long>(sizeof(uint32_t)) * v.labels_all.size();
@@ -1890,6 +1934,7 @@ namespace bs {
         stats.index_size = stats.index_space_base + stats.index_space_horizontal + stats.index_space_vertical;
         return stats;
     }
+
     void print_index_build_stats(const string &profile_name, const IndexBuildStats &stats) {
         constexpr int one_hour = 1 * 3600 * 1000, one_minute = 1 * 60 * 1000;
         cout << "### Index of " << profile_name << " ###" << endl;
@@ -1911,7 +1956,111 @@ namespace bs {
                 << static_cast<double>(stats.index_size) / (1024.0 * 1024.0)
                 << " MB" << std::defaultfloat << std::setprecision(6) << endl;
     }
-    IndexBuildStats index_construction(const string &profile_name) {
+
+    void reduce_unselective_groups() {
+        if (!build_group_label_index) return;
+        long long reduced = 0;
+        for (int uid = 0; uid < num_V; ++uid) {
+            auto &h = indices_horizontal[uid];
+            const int old = h.group;
+            if (old <= 1) continue;
+            const auto &base = indices_base[uid];
+            auto gain = [&](int count) {
+                double vertex_gain = 0, label_gain = 0;
+                int vertex_total = 0, label_total = 0;
+                for (int w = 0; w < vertex_hash_len; ++w)
+                    vertex_total += popcount32(base.vertices_all()[w]);
+                for (int w = 0; w < label_hash_len; ++w)
+                    label_total += popcount32(base.labels_all[w]);
+                const int degree = source_offset[uid + 1] - source_offset[uid];
+                for (int g = 0; g < count; ++g) {
+                    int vp = 0, lp = 0;
+                    for (int w = 0; w < vertex_hash_len; ++w) {
+                        uint32_t bits = 0;
+                        for (int j = g; j < old; j += count)
+                            bits |= h.vertices_group[j * vertex_hash_len + w];
+                        vp += popcount32(bits & base.vertices_all()[w]);
+                    }
+                    for (int w = 0; w < label_hash_len; ++w) {
+                        uint32_t bits = 0;
+                        for (int j = g; j < old; j += count)
+                            bits |= h.labels_group[j * label_hash_len + w];
+                        lp += popcount32(bits & base.labels_all[w]);
+                    }
+                    const double weight = static_cast<double>((degree - 1 - g) / count + 1) / degree;
+                    if (vertex_total) vertex_gain += weight * (1.0 - static_cast<double>(vp) / vertex_total);
+                    if (label_total) label_gain += weight * (1.0 - static_cast<double>(lp) / label_total);
+                }
+                return std::max(vertex_gain, label_gain);
+            };
+            int chosen = old;
+            const int degree = source_offset[uid + 1] - source_offset[uid];
+            if (gain(old) <= 0.05 || degree < 8) chosen = 1;
+            else {
+                const double required = gain(old) * 0.90;
+                for (int candidate = 2; candidate < old; ++candidate)
+                    if (old % candidate == 0 && degree / candidate >= 8 && gain(candidate) >= required) {
+                        chosen = candidate;
+                        break;
+                    }
+            }
+            if (chosen == old && degree / old < 8) chosen = 1;
+            if (chosen == old) continue;
+            ++reduced;
+            auto merge = [&](vector<uint32_t> &words, int width) {
+                vector<uint32_t> merged(static_cast<size_t>(chosen) * width, 0);
+                for (int g = 0; g < old; ++g)
+                    for (int w = 0; w < width; ++w)
+                        merged[(g % chosen) * width + w] |= words[g * width + w];
+                words.swap(merged);
+            };
+            if (build_forward_label_index) {
+                auto &v = indices_vertical[uid];
+                merge(v.labels_forward, forward_default_k * label_hash_len);
+                prepare_forward_layout(v, chosen);
+            }
+            h.group = chosen;
+            if (chosen == 1) {
+                vector<uint32_t>().swap(h.vertices_group);
+                vector<uint32_t>().swap(h.labels_group);
+            } else {
+                merge(h.vertices_group, vertex_hash_len);
+                merge(h.labels_group, label_hash_len);
+            }
+            horizontal_group_count[uid] = chosen;
+        }
+        cout << "H vertices with reduced grouping: " << reduced << endl;
+    }
+
+    void prepare_pruning_benefit() {
+        pruning_benefit.assign(num_V, 0);
+        for (int uid = 0; uid < num_V; ++uid) {
+            const auto &base = indices_base[uid];
+            const int degree = source_offset[uid + 1] - source_offset[uid];
+            if (base.leaf || degree < 8) continue;
+            int vertices = 0, labels_present = 0;
+            for (uint32_t word: base.vertices_all()) vertices += popcount32(word);
+            for (uint32_t word: base.labels_all) labels_present += popcount32(word);
+            if (vertices < vertex_hash_len * UINT_bits * 0.95)
+                pruning_benefit[uid] |= BASE_VERTEX;
+            if (labels_present < num_L * 0.95) pruning_benefit[uid] |= BASE_LABEL;
+            if (build_group_label_index) {
+                const auto &h = indices_horizontal[uid];
+                long long present = 0;
+                for (uint32_t word: h.vertices_group) present += popcount32(word);
+                if (h.group > 1 && present < static_cast<double>(h.group) * vertices * 0.95)
+                    pruning_benefit[uid] |= H_VERTEX;
+
+                long long label_present = 0;
+                for (uint32_t word: h.labels_group) label_present += popcount32(word);
+                const double label_universe = std::max(1, num_L);
+                if (h.group > 1 && label_present < static_cast<double>(h.group) * label_universe * 0.95)
+                    pruning_benefit[uid] |= H_LABEL;
+            }
+        }
+    }
+
+    void index_construction(const string &profile_name) {
         reset_index_state();
         auto start_time = std::chrono::high_resolution_clock::now();
         prepare_horizontal_group_features(graph_label_count);
@@ -1986,6 +2135,8 @@ namespace bs {
                 }
             }
         }
+        reduce_unselective_groups();
+        prepare_pruning_benefit();
         horizontal_dense_bytes = 0;
         for (auto &h: indices_horizontal) {
             horizontal_dense_bytes += sizeof(h.group) + sizeof(uint32_t) *
@@ -1999,8 +2150,8 @@ namespace bs {
         IndexBuildStats stats = calculate_index_space();
         stats.total_time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
         print_index_build_stats(profile_name, stats);
-        return stats;
     }
+
     bool read_queries(const string &filename) {
         auto start_time = std::chrono::high_resolution_clock::now();
         queries.clear();
@@ -2041,6 +2192,7 @@ namespace bs {
         cout << "The time to read " << name << " is: " << total_time << " ms" << endl;
         return true;
     }
+
     struct QueryRunStats {
         ProfileRuntimeStats runtime;
         vector<bool> outcomes;
@@ -2056,6 +2208,7 @@ namespace bs {
         }
         return "unknown";
     }
+
     QueryRunStats run_query_profile(const QueryProfile profile) {
         active_profile = profile;
         QueryRunStats stats;
@@ -2085,6 +2238,7 @@ namespace bs {
         }
         return stats;
     }
+
     void print_profile_runtime(const char *name, const QueryRunStats &stats) {
         cout << "### Runtime of " << name << " ###" << endl;
         for (auto &p: stats.runtime.total_count) {
@@ -2105,12 +2259,9 @@ namespace bs {
 
             VisitRatioStats only_h_ratio, only_v_ratio, tdr_ratio;
             for (size_t i = 0; i < queries.size(); ++i) {
-                only_h_ratio.add(baseline_stats->edge_visits[i], only_h_stats->edge_visits[i],
-                                 baseline_stats->outcomes[i] == only_h_stats->outcomes[i]);
-                only_v_ratio.add(baseline_stats->edge_visits[i], only_v_stats->edge_visits[i],
-                                 baseline_stats->outcomes[i] == only_v_stats->outcomes[i]);
-                tdr_ratio.add(baseline_stats->edge_visits[i], tdr_stats.edge_visits[i],
-                              baseline_stats->outcomes[i] == tdr_stats.outcomes[i]);
+                only_h_ratio.add(baseline_stats->edge_visits[i], only_h_stats->edge_visits[i]);
+                only_v_ratio.add(baseline_stats->edge_visits[i], only_v_stats->edge_visits[i]);
+                tdr_ratio.add(baseline_stats->edge_visits[i], tdr_stats.edge_visits[i]);
             }
             cout << "### Visited Edge Ratio vs Baseline ###" << endl;
             cout << "only-H: " << only_h_ratio.profile_edges << "/" << only_h_ratio.baseline_edges
@@ -2158,204 +2309,18 @@ namespace bs {
         patterns.erase(std::unique(patterns.begin(), patterns.end()), patterns.end());
         return patterns;
     }
+
     VisitRatioStats calculate_visit_ratio(const QueryRunStats &baseline,
                                           const QueryRunStats &profile) {
         VisitRatioStats ratio;
         const size_t n = std::min(baseline.outcomes.size(), profile.outcomes.size());
         for (size_t i = 0; i < n; ++i) {
-            ratio.add(baseline.edge_visits[i], profile.edge_visits[i],
-                      baseline.outcomes[i] == profile.outcomes[i]);
+            ratio.add(baseline.edge_visits[i], profile.edge_visits[i]);
         }
         return ratio;
     }
-    void write_static_file(const string &filename, const string &graph_name,
-                           const IndexBuildStats &only_h_index_stats,
-                           const IndexBuildStats &only_v_index_stats,
-                           const IndexBuildStats &tdr_index_stats,
-                           const QueryRunStats &tdr_stats,
-                           const QueryRunStats *baseline_stats = nullptr,
-                           const QueryRunStats *only_h_stats = nullptr,
-                           const QueryRunStats *only_v_stats = nullptr) {
-        const bool compare = baseline_stats && only_h_stats && only_v_stats;
-        std::ofstream out(filename, std::ios::app);
-        if (!out.is_open()) {
-            std::cerr << "Failed to create static output file: " << filename << std::endl;
-            return;
-        }
-        out.setf(std::ios::fixed, std::ios::floatfield);
-        out << std::setprecision(6);
-        const std::vector<int> patterns = query_patterns();
-        if (compare) {
-            out << std::left << std::setw(32) << graph_name
-                << std::right << std::setw(16) << only_h_index_stats.total_time
-                << std::setw(16) << static_cast<double>(only_h_index_stats.index_size) / (1024.0 * 1024.0)
-                << std::setw(16) << only_v_index_stats.total_time
-                << std::setw(16) << static_cast<double>(only_v_index_stats.index_size) / (1024.0 * 1024.0)
-                << std::setw(16) << tdr_index_stats.total_time
-                << std::setw(16) << static_cast<double>(tdr_index_stats.index_size) / (1024.0 * 1024.0);
-        }else {
-            out << std::left << std::setw(32) << graph_name
-                << std::right << std::setw(16) << tdr_index_stats.total_time
-                << std::setw(16) << static_cast<double>(tdr_index_stats.index_size) / (1024.0 * 1024.0);
-        }
-
-
-        auto write_means = [&](const std::map<int, std::vector<std::pair<double, int> > > &table) {
-            for (const int pattern: patterns) {
-                for (int length = 1; length <= output_max_label_length; ++length) {
-                    out << std::setw(16) << runtime_mean(table, pattern, length);
-                }
-            }
-        };
-        write_means(tdr_stats.runtime.true_qtime);
-        write_means(tdr_stats.runtime.false_qtime);
-
-        auto write_summary = [&](const QueryRunStats &stats) {
-            for (const int pattern: patterns) {
-                const auto count_it = stats.runtime.total_count.find(pattern);
-                const int count = count_it == stats.runtime.total_count.end() ? 0 : count_it->second;
-                const auto time_it = stats.runtime.total_time.find(pattern);
-                const double total_time = time_it == stats.runtime.total_time.end() ? 0.0 : time_it->second;
-                const auto true_count_it = stats.runtime.true_count.find(pattern);
-                const int true_count = true_count_it == stats.runtime.true_count.end() ? 0 : true_count_it->second;
-                const auto true_time_it = stats.runtime.true_time.find(pattern);
-                const double true_time = true_time_it == stats.runtime.true_time.end() ? 0.0 : true_time_it->second;
-                out << std::setw(12) << count << std::setw(16) << total_time
-                        << std::setw(12) << true_count << std::setw(16) << true_time;
-            }
-        };
-        write_summary(tdr_stats);
-        if (compare) {
-            write_summary(*baseline_stats);
-            write_summary(*only_h_stats);
-            write_summary(*only_v_stats);
-            const VisitRatioStats only_h = calculate_visit_ratio(*baseline_stats, *only_h_stats);
-            const VisitRatioStats only_v = calculate_visit_ratio(*baseline_stats, *only_v_stats);
-            const VisitRatioStats tdr = calculate_visit_ratio(*baseline_stats, tdr_stats);
-            out << std::setw(16) << only_h.ratio() << std::setw(16) << only_v.ratio()
-                    << std::setw(16) << tdr.ratio()
-                    << std::setw(12) << only_h.mismatches << std::setw(12) << only_v.mismatches
-                    << std::setw(12) << tdr.mismatches;
-        }
-        out << '\n';
-    }
-    void write_runtime_file(const string &filename, const bool compare,
-                            const QueryRunStats &tdr_stats,
-                            const IndexBuildStats &only_h_index_stats,
-                            const IndexBuildStats &only_v_index_stats,
-                            const IndexBuildStats &tdr_index_stats,
-                            const QueryRunStats *baseline_stats = nullptr,
-                            const QueryRunStats *only_h_stats = nullptr,
-                            const QueryRunStats *only_v_stats = nullptr) {
-        std::ofstream out(filename, std::ios::out);
-        if (!out.is_open()) {
-            std::cerr << "Failed to create runtime output file: " << filename << std::endl;
-            return;
-        }
-        out.setf(std::ios::fixed, std::ios::floatfield);
-        out << std::setprecision(6);
-        const std::vector<int> patterns = query_patterns();
-        out << "index_build_time_ms only-H=" << only_h_index_stats.total_time
-                << " only-V=" << only_v_index_stats.total_time
-                << " TDR=" << tdr_index_stats.total_time << '\n';
-        out << "index_space_mb only-H="
-                << static_cast<double>(only_h_index_stats.index_size) / (1024.0 * 1024.0)
-                << " only-V="
-                << static_cast<double>(only_v_index_stats.index_size) / (1024.0 * 1024.0)
-                << " TDR="
-                << static_cast<double>(tdr_index_stats.index_size) / (1024.0 * 1024.0) << "\n\n";
-        auto write_profile = [&](const char *name, const QueryRunStats &stats) {
-            out << "[" << name << "]\n";
-            for (const int pattern: patterns) {
-                const auto it = stats.runtime.total_count.find(pattern);
-                if (it == stats.runtime.total_count.end()) continue;
-                out << "pattern=" << pattern
-                        << " total_count=" << it->second
-                        << " total_time_ms=" << map_double_or_zero(stats.runtime.total_time, pattern)
-                        << " true_count=" << map_count_or_zero(stats.runtime.true_count, pattern)
-                        << " true_time_ms=" << map_double_or_zero(stats.runtime.true_time, pattern) << '\n';
-                out << "  true_mean_ms:";
-                for (int length = 1; length <= output_max_label_length; ++length)
-                    out << ' ' << runtime_mean(stats.runtime.true_qtime, pattern, length);
-                out << "\n  false_mean_ms:";
-                for (int length = 1; length <= output_max_label_length; ++length)
-                    out << ' ' << runtime_mean(stats.runtime.false_qtime, pattern, length);
-                out << '\n';
-            }
-            out << '\n';
-        };
-        if (compare && baseline_stats && only_h_stats && only_v_stats) {
-            write_profile("baseline", *baseline_stats);
-            write_profile("only-H", *only_h_stats);
-            write_profile("only-V", *only_v_stats);
-        }
-        write_profile("TDR", tdr_stats);
-        if (compare && baseline_stats && only_h_stats && only_v_stats) {
-            const VisitRatioStats only_h = calculate_visit_ratio(*baseline_stats, *only_h_stats);
-            const VisitRatioStats only_v = calculate_visit_ratio(*baseline_stats, *only_v_stats);
-            const VisitRatioStats tdr = calculate_visit_ratio(*baseline_stats, tdr_stats);
-            out << "[comparison]\n"
-                    << "only-H edge_ratio=" << only_h.ratio() << " mismatches=" << only_h.mismatches << '\n'
-                    << "only-V edge_ratio=" << only_v.ratio() << " mismatches=" << only_v.mismatches << '\n'
-                    << "TDR edge_ratio=" << tdr.ratio() << " mismatches=" << tdr.mismatches << '\n';
-        }
-    }
-    void write_result_file(const string &filename, const string &graph_name,
-                           const IndexBuildStats &index_stats,
-                           const QueryRunStats &tdr_stats,
-                           const QueryRunStats *baseline_stats = nullptr,
-                           const QueryRunStats *only_h_stats = nullptr,
-                           const QueryRunStats *only_v_stats = nullptr) {
-        const bool compare = baseline_stats && only_h_stats && only_v_stats;
-        std::ofstream out(filename, std::ios::out);
-        if (!out.is_open()) {
-            std::cerr << "Failed to create result output file: " << filename << std::endl;
-            return;
-        }
-        out.setf(std::ios::fixed, std::ios::floatfield);
-        out << std::setprecision(6);
-        const std::vector<int> patterns = query_patterns();
-        out << "graph: " << graph_name << '\n'
-                << "indexTime: " << index_stats.total_time << " ms\n"
-                << "indexSpace: " << static_cast<double>(index_stats.index_size) / (1024.0 * 1024.0) << " MB\n\n";
-        auto write_result_summary = [&](const char *name, const QueryRunStats &stats) {
-            out << '[' << name << "]\n";
-            for (const int pattern: patterns) {
-                const auto it = stats.runtime.total_count.find(pattern);
-                if (it == stats.runtime.total_count.end()) continue;
-                out << "pattern=" << pattern << " total=" << it->second
-                        << " time_ms=" << map_double_or_zero(stats.runtime.total_time, pattern)
-                        << " reachable=" << map_count_or_zero(stats.runtime.true_count, pattern) << '\n';
-            }
-            out << '\n';
-        };
-        if (compare) {
-            write_result_summary("baseline", *baseline_stats);
-            write_result_summary("only-H", *only_h_stats);
-            write_result_summary("only-V", *only_v_stats);
-        }
-        write_result_summary("TDR", tdr_stats);
-        if (compare) {
-            const VisitRatioStats only_h = calculate_visit_ratio(*baseline_stats, *only_h_stats);
-            const VisitRatioStats only_v = calculate_visit_ratio(*baseline_stats, *only_v_stats);
-            const VisitRatioStats tdr = calculate_visit_ratio(*baseline_stats, tdr_stats);
-            out << "[comparison]\n"
-                    << "only-H edge_ratio=" << only_h.ratio() << " mismatches=" << only_h.mismatches << endl
-                    << "only-V edge_ratio=" << only_v.ratio() << " mismatches=" << only_v.mismatches << endl
-                    << "TDR edge_ratio=" << tdr.ratio() << " mismatches=" << tdr.mismatches << endl << endl;
-            out << "[TDR mismatches]\n";
-            for (size_t i = 0; i < queries.size() && i < baseline_stats->outcomes.size(); ++i) {
-                if (baseline_stats->outcomes[i] != tdr_stats.outcomes[i]) {
-                    out << "query_index=" << i << " origin=" << queries[i].origin
-                            << " destination=" << queries[i].destination
-                            << " pattern=" << queries[i].pattern
-                            << " baseline=" << baseline_stats->outcomes[i]
-                            << " TDR=" << tdr_stats.outcomes[i] << '\n';
-                }
-            }
-        }
-    }
 }
+
 int main(const int argc, char *argv[]) {
     using namespace bs;
 
@@ -2395,6 +2360,7 @@ int main(const int argc, char *argv[]) {
         return 3;
     qs.init(num_V);
     if (reach_mode != "lcr") qsSup.init(num_V);
+
     bool has_whole_path_pattern = false;
     for (const Query &q: queries) {
         if (q.pattern == 1 || q.pattern == 2 || q.pattern == 5 || q.pattern == 6) {
@@ -2404,18 +2370,22 @@ int main(const int argc, char *argv[]) {
     }
     if (has_whole_path_pattern) ps.init(num_V, label_hash_len);
 
+    const string runtime_name = graph_name + "_runtime_" + reach_mode;
+    const string result_name = graph_name + "_result_" + reach_mode;
+    const string static_name = "0static_TDR_" + reach_mode;
+
     cout << "********* start to build index and answer queries! *********" << endl;
     if (compare_pruning) {
         configure_index_components(reach_mode, IndexProfile::OnlyH);
-        const IndexBuildStats only_h_index_stats = index_construction("Only-H");
+        index_construction("Only-H");
         const QueryRunStats only_h_stats = run_query_profile(QueryProfile::OnlyH);
 
         configure_index_components(reach_mode, IndexProfile::OnlyV);
-        const IndexBuildStats only_v_index_stats = index_construction("Only-V");
+        index_construction("Only-V");
         const QueryRunStats only_v_stats = run_query_profile(QueryProfile::OnlyV);
 
         configure_index_components(reach_mode, IndexProfile::TDR);
-        const IndexBuildStats tdr_index_stats = index_construction("TDR");
+        index_construction("TDR");
         const QueryRunStats tdr_stats = run_query_profile(QueryProfile::Full);
 
         prepare_baseline_traversal_state();
@@ -2425,7 +2395,7 @@ int main(const int argc, char *argv[]) {
         print_runtime_summary(tdr_stats, &baseline_stats, &only_h_stats, &only_v_stats);
     } else {
         configure_index_components(reach_mode, IndexProfile::TDR);
-        const IndexBuildStats tdr_index_stats = index_construction("TDR");
+        index_construction("TDR");
         const QueryRunStats tdr_stats = run_query_profile(QueryProfile::Full);
         print_runtime_summary(tdr_stats);
     }
